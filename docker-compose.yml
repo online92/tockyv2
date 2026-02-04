@@ -1,0 +1,14 @@
+
+version: '3.8'
+services:
+  endo-ai:
+    build: .
+    container_name: endo-ai-app
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    # API_KEY can be passed here or set in Portainer env settings
+    # environment:
+    #   - API_KEY=your_key_here
