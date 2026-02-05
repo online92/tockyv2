@@ -3,7 +3,14 @@ import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { SupportedLanguage, TranscriptSegment, FiveWOneH } from "../types";
 
 // Helper to get fresh AI instance with current API key
-const getAi = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAi = () => {
+  // Ưu tiên lấy key người dùng nhập, nếu không có thì dùng env (trống)
+  const userKey = localStorage.getItem('endo_gemini_api_key');
+  if (!userKey && !process.env.API_KEY) {
+    throw new Error("Vui lòng nhập API Key trong phần Cài đặt/Đăng nhập.");
+  }
+  return new GoogleGenAI({ apiKey: userKey || process.env.API_KEY || "" });
+};
 
 const preProcessText = (text: string, language: SupportedLanguage): string => {
   if (language !== SupportedLanguage.VIETNAMESE) return text;
