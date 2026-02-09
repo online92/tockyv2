@@ -2,20 +2,22 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { SupportedLanguage, TranscriptSegment, FiveWOneH } from "../types";
 
-// Helper to get fresh AI instance with current API key
-const getAi = () => {
-  // Ưu tiên lấy key người dùng nhập, nếu không có thì dùng env (trống)
-  const userKey = localStorage.getItem('endo_gemini_api_key');
-  if (!userKey && !process.env.API_KEY) {
-    throw new Error("Vui lòng nhập API Key trong phần Cài đặt/Đăng nhập.");
+// Helper để lấy instance Gemini với API Key mới nhất
+const getAi = async () => {
+  let apiKey = process.env.API_KEY || '';
+  
+  if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
+    const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+    if (hasKey) {
+       apiKey = (process.env.API_KEY as string) || '';
+    }
   }
-  return new GoogleGenAI({ apiKey: userKey || process.env.API_KEY || "" });
-};
 
-const preProcessText = (text: string, language: SupportedLanguage): string => {
-  if (language !== SupportedLanguage.VIETNAMESE) return text;
-  const units = ["không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"];
-  return text.replace(/\d/g, (match) => units[parseInt(match)] + " ");
+  if (!apiKey) {
+    throw new Error("Missing API_KEY. Vui lòng thiết lập API Key.");
+  }
+
+  return new GoogleGenAI({ apiKey });
 };
 
 const getLangPrompt = (lang: SupportedLanguage) => {
@@ -32,15 +34,20 @@ export const refineTextWithGemini = async (
   customVocabulary: string
 ): Promise<string> => {
   if (!text.trim()) return "";
-  const ai = getAi();
-  const langPrompt = getLangPrompt(language);
-  const prompt = `Refine the raw transcription into professional ${langPrompt}. Context: ${customVocabulary}. Fix grammar, remove fillers. Text: "${text}"`;
-  
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: prompt,
-  });
-  return response.text || "";
+  try {
+    const ai = await getAi();
+    const langPrompt = getLangPrompt(language);
+    const prompt = `Refine the raw transcription into professional ${langPrompt}. Context: ${customVocabulary}. Fix grammar, remove fillers, keep original meaning. Text: "${text}"`;
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+    });
+    return response.text || text;
+  } catch (e) {
+    console.error(e);
+    return text;
+  }
 };
 
 export const parse5W1HWithGemini = async (
@@ -48,25 +55,25 @@ export const parse5W1HWithGemini = async (
   language: SupportedLanguage
 ): Promise<FiveWOneH> => {
   if (!text.trim()) return { who: "", what: "", where: "", when: "", why: "", how: "" };
-  const ai = getAi();
-  const langPrompt = getLangPrompt(language);
-
-  const responseSchema = {
-    type: Type.OBJECT,
-    properties: {
-      who: { type: Type.STRING },
-      what: { type: Type.STRING },
-      where: { type: Type.STRING },
-      when: { type: Type.STRING },
-      why: { type: Type.STRING },
-      how: { type: Type.STRING },
-    },
-    required: ["who", "what", "where", "when", "why", "how"]
-  };
-
-  const prompt = `Analyze the following text and extract 5W1H information in ${langPrompt}. If an element is missing, return an empty string. Text: "${text}"`;
-
   try {
+    const ai = await getAi();
+    const langPrompt = getLangPrompt(language);
+
+    const responseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        who: { type: Type.STRING },
+        what: { type: Type.STRING },
+        where: { type: Type.STRING },
+        when: { type: Type.STRING },
+        why: { type: Type.STRING },
+        how: { type: Type.STRING },
+      },
+      required: ["who", "what", "where", "when", "why", "how"]
+    };
+
+    const prompt = `Analyze the provided text and extract 5W1H elements in ${langPrompt}. Text: "${text}"`;
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: prompt,
@@ -78,7 +85,7 @@ export const parse5W1HWithGemini = async (
     return JSON.parse(response.text || "{}") as FiveWOneH;
   } catch (error) {
     console.error("Gemini 5W1H Error:", error);
-    throw error;
+    return { who: "Lỗi", what: "Lỗi", where: "Lỗi", when: "Lỗi", why: "Lỗi", how: "Lỗi" };
   }
 };
 
@@ -90,9 +97,8 @@ export const generateSpeechWithGemini = async (
   language: SupportedLanguage = SupportedLanguage.VIETNAMESE
 ): Promise<string> => {
   if (!text.trim()) return "";
-  const ai = getAi();
-  const processedText = preProcessText(text, language);
-  const fullPrompt = `Chỉ dẫn giọng đọc: ${accentInstruction} ${styleInstruction}\n\nVăn bản: "${processedText}"`;
+  const ai = await getAi();
+  const fullPrompt = `Chỉ dẫn phong cách: ${accentInstruction} ${styleInstruction}\n\nVăn bản: "${text}"`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash-preview-tts",
@@ -117,45 +123,60 @@ export const transcribeAudioFile = async (
   language: SupportedLanguage,
   customVocabulary: string
 ): Promise<TranscriptSegment[]> => {
-  const ai = getAi();
+  const ai = await getAi();
+  
   const responseSchema = {
-    type: Type.ARRAY,
-    items: {
-      type: Type.OBJECT,
-      properties: {
-        speaker: { type: Type.STRING },
-        timestamp: { type: Type.STRING },
-        text: { type: Type.STRING }
-      },
-      required: ["speaker", "timestamp", "text"]
-    }
+    type: Type.OBJECT,
+    properties: {
+      segments: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            speaker: { type: Type.STRING, description: "Tên hoặc nhãn của người nói (Ví dụ: Người nói 1, Nhân viên...)" },
+            timestamp: { type: Type.STRING, description: "Mốc thời gian định dạng MM:SS" },
+            text: { type: Type.STRING, description: "Nội dung văn bản được gỡ băng cho đoạn này" }
+          },
+          required: ["speaker", "timestamp", "text"]
+        }
+      }
+    },
+    required: ["segments"]
   };
 
   const langPrompt = getLangPrompt(language);
-  const prompt = `Transcribe this audio precisely in ${langPrompt}. 
-  Identify different speakers as "Speaker 1", "Speaker 2", etc. 
-  Include timestamps in [MM:SS] format. 
-  Context/Special terms: ${customVocabulary}`;
+  const prompt = `Bạn là một chuyên gia gỡ băng ghi âm chuyên nghiệp cho ngôn ngữ ${langPrompt}. 
+  Hãy chuyển đổi file âm thanh đính kèm thành văn bản. 
+  Yêu cầu:
+  - Phân tách rõ ràng từng người nói nếu có hội thoại.
+  - Ghi mốc thời gian [MM:SS] chính xác cho mỗi lượt nói.
+  - Chú ý các từ chuyên môn: ${customVocabulary}.
+  - Luôn trả về kết quả dưới dạng JSON hợp lệ.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { mimeType, data: base64Audio } },
-        { text: prompt }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: responseSchema,
-    }
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: {
+        parts: [
+          { inlineData: { mimeType: mimeType || 'audio/mpeg', data: base64Audio } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: responseSchema,
+      }
+    });
 
-  const segments = JSON.parse(response.text || "[]");
-  return segments.map((s: any, idx: number) => ({
-    id: `seg-${Date.now()}-${idx}`,
-    speaker: s.speaker || "Speaker",
-    timestamp: s.timestamp || "00:00",
-    text: s.text || ""
-  }));
+    const parsed = JSON.parse(response.text || '{"segments":[]}');
+    return (parsed.segments || []).map((s: any, i: number) => ({
+      id: `file-seg-${Date.now()}-${i}`,
+      speaker: s.speaker || "Người nói",
+      timestamp: s.timestamp || "00:00",
+      text: s.text || ""
+    }));
+  } catch (error) {
+    console.error("Transcription Error:", error);
+    throw new Error("Không thể gỡ băng file âm thanh này. Vui lòng kiểm tra lại định dạng hoặc API Key.");
+  }
 };

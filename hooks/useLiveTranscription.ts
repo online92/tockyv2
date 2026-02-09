@@ -36,13 +36,16 @@ export const useLiveTranscription = (language: SupportedLanguage) => {
 
   const stopRecording = useCallback(() => {
     if (sessionRef.current) {
+      try { sessionRef.current.close(); } catch (e) {}
       sessionRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
     if (audioContextRef.current) {
-      audioContextRef.current.close();
+      try { audioContextRef.current.close(); } catch (e) {}
+      audioContextRef.current = null;
     }
     setIsRecording(false);
     setInterimTranscript('');
@@ -50,18 +53,36 @@ export const useLiveTranscription = (language: SupportedLanguage) => {
 
   const startRecording = useCallback(async () => {
     try {
-      setIsRecording(true);
       setError(null);
-      
-      // Check for API Key selection right before connecting
-      const hasKey = await (window as any).aistudio?.hasSelectedApiKey();
-      if (!hasKey) {
-        await (window as any).aistudio?.openSelectKey();
+
+      if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+        setError("Microphone yêu cầu HTTPS hoặc localhost. Nếu dùng Synology, hãy kích hoạt HTTPS.");
+        return;
       }
 
-      // Re-initialize with potentially new process.env.API_KEY
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setIsRecording(true);
+      
+      let apiKey = process.env.API_KEY;
+      if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
+        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+        if (!hasKey && (!apiKey || apiKey === '')) {
+          await (window as any).aistudio.openSelectKey();
+        }
+      }
+
+      if (!apiKey && (!isRecording)) {
+        // Fallback check again
+        apiKey = (process as any).env?.API_KEY;
+      }
+
+      const ai = new GoogleGenAI({ apiKey: apiKey || '' });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(err => {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDismissedError') {
+          throw new Error("Bạn đã từ chối quyền truy cập Microphone.");
+        }
+        throw err;
+      });
+      
       streamRef.current = stream;
 
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -71,14 +92,16 @@ export const useLiveTranscription = (language: SupportedLanguage) => {
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         callbacks: {
           onopen: () => {
+            console.log("Live API connected");
             const source = audioContext.createMediaStreamSource(stream);
             const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
             
             scriptProcessor.onaudioprocess = (e) => {
+              if (!sessionRef.current) return;
               const inputData = e.inputBuffer.getChannelData(0);
               const pcmBlob = createBlob(inputData);
               sessionPromise.then(session => {
-                session.sendRealtimeInput({ media: pcmBlob });
+                try { session.sendRealtimeInput({ media: pcmBlob }); } catch(err) {}
               });
             };
             
@@ -92,18 +115,19 @@ export const useLiveTranscription = (language: SupportedLanguage) => {
             }
             if (message.serverContent?.turnComplete) {
               setTranscript(prev => {
-                const updated = (prev.trim() + ' ' + interimTranscript.trim()).trim();
+                const currentInterim = interimTranscript;
+                const updated = (prev.trim() + ' ' + currentInterim.trim()).trim();
                 return updated;
               });
               setInterimTranscript('');
             }
           },
-          onerror: (e) => {
+          onerror: (e: any) => {
             console.error("Live API Error:", e);
-            if (e.message?.includes("Requested entity was not found")) {
-              setError("API Key không hợp lệ hoặc đã hết hạn.");
+            if (e.message?.includes("Network error") || e.status === 403) {
+              setError("Lỗi mạng hoặc API Key không hợp lệ. Hãy kiểm tra kết nối internet và biến môi trường API_KEY.");
             } else {
-              setError("Lỗi kết nối AI Live API");
+              setError(e.message || "Lỗi kết nối Live API.");
             }
             stopRecording();
           },
@@ -114,15 +138,15 @@ export const useLiveTranscription = (language: SupportedLanguage) => {
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
-          systemInstruction: `Bạn là một trợ lý tốc ký chuyên nghiệp. Hãy chuyển đổi giọng nói sang văn bản ${language} một cách chính xác. Bỏ qua các từ đệm, tiếng ồn, giữ đúng ngữ nghĩa trang trọng.`,
+          systemInstruction: `Transcribe speech to ${language} precisely. Do not summarize. Professional stenography mode.`,
         }
       });
 
       sessionRef.current = sessionPromise;
 
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError("Cần quyền truy cập Microphone.");
+      setError(err.message || "Không thể khởi tạo ghi âm.");
       setIsRecording(false);
     }
   }, [language, stopRecording, interimTranscript]);

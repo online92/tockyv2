@@ -51,6 +51,7 @@ export interface StoredFile {
   content: string;
   parsing5W1H?: FiveWOneH;
   audioUrl?: string;
+  segments?: TranscriptSegment[];
 }
 
 export interface TTSVoice {

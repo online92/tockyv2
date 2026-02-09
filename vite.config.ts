@@ -7,12 +7,20 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     define: {
-      'process.env.API_KEY': JSON.stringify(env.API_KEY)
+      'process.env.API_KEY': JSON.stringify(env.API_KEY || '')
     },
     server: {
-      host: true, // Listen on all local IPs (important for Docker)
+      host: true, 
       port: 5173,
       strictPort: true,
+      watch: {
+        usePolling: true, // Cần thiết cho một số hệ thống file trên Docker/NAS
+      },
+    },
+    build: {
+      outDir: 'dist',
+      sourcemap: false,
+      chunkSizeWarningLimit: 1000,
     }
   };
 });

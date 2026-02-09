@@ -14,9 +14,10 @@ import { generateSpeechWithGemini, transcribeAudioFile } from '../services/gemin
 interface AudioStudioProps {
   language: SupportedLanguage;
   vocabulary: string;
+  onSttComplete?: (segments: TranscriptSegment[]) => void;
 }
 
-export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }) => {
+export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary, onSttComplete }) => {
   const [activeTab, setActiveTab] = useState<'tts' | 'stt'>('tts');
   
   // TTS State
@@ -32,7 +33,6 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
 
   // STT State
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [sttResult, setSttResult] = useState<TranscriptSegment[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mainAudioRef = useRef<HTMLAudioElement>(null);
@@ -98,7 +98,7 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
       }
     } catch (error) {
       console.error(error);
-      alert("Lỗi khi tạo giọng nói.");
+      alert("Lỗi khi tạo giọng nói. Kiểm tra API Key.");
       setPreviewingVoiceId(null);
     } finally {
       if (!isPreview) setIsGeneratingTts(false);
@@ -106,7 +106,7 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
   };
 
   const handlePreviewVoice = (voiceId: string) => {
-    const previewText = "Chào bạn, 1 2 3, tôi là trợ lý ENDO.";
+    const previewText = "Chào bạn, đây là mẫu giọng nói của hệ thống ENDO AI.";
     handleGenerateTTS(previewText, voiceId, true);
   };
 
@@ -129,20 +129,24 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
     
     try {
       const reader = new FileReader();
-      reader.readAsArrayBuffer(file);
+      reader.readAsDataURL(file);
       reader.onload = async () => {
-        const base64 = btoa(
-          new Uint8Array(reader.result as ArrayBuffer)
-            .reduce((data, byte) => data + String.fromCharCode(byte), '')
-        );
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
         setUploadProgress(40);
-        const segments = await transcribeAudioFile(base64, file.type, language, vocabulary);
-        setSttResult(segments);
-        setUploadProgress(100);
+        
+        try {
+          const segments = await transcribeAudioFile(base64, file.type, language, vocabulary);
+          setUploadProgress(100);
+          if (onSttComplete) onSttComplete(segments);
+        } catch (err) {
+          console.error(err);
+          alert("Lỗi khi gỡ băng. Kiểm tra định dạng file và API Key.");
+        }
       };
     } catch (error) {
       console.error(error);
-      alert("Lỗi khi gỡ băng âm thanh.");
+      alert("Lỗi khi đọc file.");
     } finally {
       setIsTranscribing(false);
       setTimeout(() => setUploadProgress(0), 1000);
@@ -151,7 +155,6 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-zinc-950 p-3 sm:p-6">
-      {/* Tab Switcher */}
       <div className="flex justify-center mb-6 shrink-0 px-2">
         <div className="bg-emerald-50 dark:bg-zinc-900 p-1 rounded-2xl flex gap-1 shadow-inner border border-emerald-100 dark:border-zinc-800 w-full max-w-sm">
           <button 
@@ -176,7 +179,7 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
               <div className="flex-1 bg-emerald-50/30 dark:bg-zinc-900/40 rounded-[24px] border-2 border-emerald-100 dark:border-zinc-800 p-4 sm:p-6 flex flex-col shadow-inner">
                 <textarea 
                   className="flex-1 bg-transparent resize-none focus:outline-none text-base sm:text-lg font-medium text-emerald-950 dark:text-zinc-100"
-                  placeholder="Nhập nội dung... các con số 1 2 3 sẽ được xử lý tự động."
+                  placeholder="Nhập nội dung... "
                   value={ttsText}
                   onChange={(e) => setTtsText(e.target.value)}
                 />
@@ -195,11 +198,10 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
               </Button>
             </div>
 
-            <div className="w-full lg:w-[350px] xl:w-[400px] flex flex-col gap-4 overflow-y-auto pr-1 pb-4">
+            <div className="w-full lg:w-[350px] xl:w-[400px] flex flex-col gap-4 overflow-y-auto pr-1 pb-4 custom-scrollbar">
               <div className="bg-white dark:bg-zinc-900 rounded-[24px] border border-emerald-100 dark:border-zinc-800 p-5 sm:p-6 shadow-xl space-y-6">
                 <h3 className="text-xs font-black uppercase tracking-widest text-emerald-600 flex items-center gap-2"><Settings2 className="w-4 h-4"/> Tùy chỉnh</h3>
                 
-                {/* Speed */}
                 <div className="space-y-3">
                   <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block flex items-center justify-between">
                     <span className="flex items-center gap-2"><Gauge className="w-3 h-3"/> Tốc độ: {playbackSpeed.toFixed(1)}x</span>
@@ -207,52 +209,39 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
                   <input type="range" min="0.5" max="2.0" step="0.1" value={playbackSpeed} onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))} className="w-full h-2 bg-emerald-100 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-600 touch-none"/>
                 </div>
 
-                {/* Accent Selection */}
                 {language === SupportedLanguage.VIETNAMESE && (
                   <div className="space-y-3">
                     <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block flex items-center gap-2"><MapPin className="w-3 h-3"/> Giọng vùng miền</label>
                     <div className="grid grid-cols-3 gap-2">
                       {VIETNAMESE_ACCENTS.map(acc => (
-                        <button key={acc.id} onClick={() => setSelectedAccent(acc.id)} className={`px-1 py-3 rounded-xl text-[9px] font-bold uppercase transition-all border-2 text-center ${selectedAccent === acc.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-zinc-100 dark:border-zinc-800'}`}>{acc.label}</button>
+                        <button key={acc.id} onClick={() => setSelectedAccent(acc.id)} className={`px-1 py-3 rounded-xl text-[9px] font-bold uppercase transition-all border-2 text-center ${selectedAccent === acc.id ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-zinc-100 dark:border-zinc-800'}`}>{acc.label}</button>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Style */}
                 <div className="space-y-3">
                   <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block flex items-center gap-2"><Smile className="w-3 h-3"/> Phong cách</label>
                   <div className="grid grid-cols-2 gap-2">
                     {SPEECH_STYLES.map(style => (
-                      <button key={style.id} onClick={() => setSelectedStyle(style.id)} className={`px-2 py-3 rounded-xl text-[9px] font-bold uppercase transition-all border-2 ${selectedStyle === style.id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-zinc-100 dark:border-zinc-800'}`}>{style.label}</button>
+                      <button key={style.id} onClick={() => setSelectedStyle(style.id)} className={`px-2 py-3 rounded-xl text-[9px] font-bold uppercase transition-all border-2 ${selectedStyle === style.id ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-zinc-100 dark:border-zinc-800'}`}>{style.label}</button>
                     ))}
                   </div>
                 </div>
 
-                {/* Voice Selection */}
                 <div className="space-y-3">
                   <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block flex items-center gap-2"><User className="w-3 h-3"/> Giọng nhân vật</label>
-                  <div className="grid grid-cols-1 gap-2 max-h-[160px] lg:max-h-[220px] overflow-y-auto pr-1">
+                  <div className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
                     {TTS_VOICES.map(voice => (
                       <div key={voice.id} className={`p-3 rounded-xl border-2 flex items-center justify-between transition-all ${selectedVoice === voice.id ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : 'border-zinc-100 dark:border-zinc-800'}`}>
                         <button onClick={() => setSelectedVoice(voice.id)} className="flex items-center gap-3 flex-1 text-left min-w-0">
                           <div className={`p-2 rounded-lg shrink-0 ${voice.gender === 'male' ? 'bg-blue-100 text-blue-600' : 'bg-pink-100 text-pink-600'}`}><User className="w-3.5 h-3.5"/></div>
                           <div className="truncate"><p className="text-[11px] font-bold truncate">{voice.name}</p></div>
                         </button>
-                        <button onClick={() => handlePreviewVoice(voice.id)} disabled={previewingVoiceId !== null} className={`p-2 rounded-full active:scale-90 ${previewingVoiceId === voice.id ? 'bg-emerald-500 text-white' : 'text-zinc-400 hover:text-emerald-600'}`}>
+                        <button onClick={() => handlePreviewVoice(voice.id)} disabled={previewingVoiceId !== null} className={`p-2 rounded-full active:scale-90 transition-all ${previewingVoiceId === voice.id ? 'bg-emerald-500 text-white' : 'text-zinc-400 hover:text-emerald-600'}`}>
                           {previewingVoiceId === voice.id ? <Volume2 className="w-4 h-4 animate-pulse"/> : <Play className="w-4 h-4"/>}
                         </button>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Format selection */}
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block flex items-center gap-2"><FileType className="w-3 h-3"/> Định dạng</label>
-                  <div className="flex gap-2">
-                    {['wav', 'mp3'].map(fmt => (
-                      <button key={fmt} onClick={() => setDownloadFormat(fmt as any)} className={`flex-1 py-2.5 rounded-xl text-[10px] font-bold uppercase border-2 transition-all ${downloadFormat === fmt ? 'bg-zinc-800 text-white border-zinc-800' : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-400 border-zinc-100 dark:border-zinc-800'}`}>{fmt}</button>
                     ))}
                   </div>
                 </div>
@@ -283,7 +272,7 @@ export const AudioStudio: React.FC<AudioStudioProps> = ({ language, vocabulary }
                 <>
                   <div className="w-16 h-16 sm:w-20 sm:h-20 bg-emerald-100 dark:bg-zinc-800 rounded-3xl flex items-center justify-center mb-6 shadow-inner"><Upload className="w-8 h-8 text-emerald-600"/></div>
                   <h3 className="text-lg font-black text-emerald-950 dark:text-zinc-100 mb-2">Tải file âm thanh</h3>
-                  <p className="text-xs text-zinc-400 mb-6 max-w-xs mx-auto">Tự động nhận diện người nói và gỡ băng đa ngôn ngữ.</p>
+                  <p className="text-xs text-zinc-400 mb-6 max-w-xs mx-auto leading-relaxed">Hệ thống sẽ tự động gỡ băng sang văn bản và lưu vào thư viện ghi chú.</p>
                   <Button variant="primary" className="rounded-2xl px-8 h-12 shadow-lg active:scale-95">Chọn File</Button>
                 </>
               )}
